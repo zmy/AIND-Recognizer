@@ -77,7 +77,24 @@ class SelectorBIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        best_score = float('inf')
+        best_model = None
+        logN = np.log(self.X.shape[0])
+        p = lambda num_states: num_states * self.X.shape[1] + num_states ** 2  # number of parameters
+
+        for n in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                model = self.base_model(n)
+                if model is not None:
+                    score = -2 * model.score(self.X, self.lengths) + p(n) * logN
+                    if score < best_score:
+                        best_score = score
+                        best_model = model
+            except:
+                if self.verbose:
+                    print("BIC: failure on {} with {} states".format(self.this_word, n))
+
+        return best_model
 
 
 class SelectorDIC(ModelSelector):
@@ -93,7 +110,29 @@ class SelectorDIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        best_score = float('-inf')
+        best_model = None
+
+        for n in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                model = self.base_model(n)
+                if model is not None:
+                    score = model.score(self.X, self.lengths)
+                    others = []
+                    for word, (X, lengths) in self.hwords.items():
+                        if word != self.this_word:
+                            others.append(model.score(X, lengths))
+                    if len(others) > 0:
+                        score -= np.mean(others)
+
+                    if score > best_score:
+                        best_score = score
+                        best_model = model
+            except:
+                if self.verbose:
+                    print("DIC: failure on {} with {} states".format(self.this_word, n))
+
+        return best_model
 
 
 class SelectorCV(ModelSelector):
@@ -105,4 +144,28 @@ class SelectorCV(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection using CV
-        raise NotImplementedError
+        best_score = float('-inf')
+        best_n = self.n_constant
+        split_method = KFold(random_state=self.random_state)
+
+        for n in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                scores = []
+                for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                    train_X, train_lengths = combine_sequences(cv_train_idx, self.sequences)
+                    test_X, test_lengths = combine_sequences(cv_test_idx, self.sequences)
+
+                    model = GaussianHMM(n_components=n, covariance_type="diag", n_iter=1000,
+                                        random_state=self.random_state, verbose=False).fit(train_X, train_lengths)
+                    score = model.score(test_X, test_lengths)
+                    scores.append(score)
+
+                mean_score = np.mean(scores)
+                if mean_score > best_score:
+                    best_score = mean_score
+                    best_n = n
+            except:
+                if self.verbose:
+                    print("CV: failure on {} with {} states".format(self.this_word, n))
+
+        return self.base_model(best_n)
